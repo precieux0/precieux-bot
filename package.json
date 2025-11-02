@@ -1,7 +1,7 @@
 {
-  "name": "okitakoybot-render-final",
+  "name": "okitakoybot-render-pro",
   "version": "2.0.0",
-  "description": "OkitakoyBot — WhatsApp bot personnel de Précieux Okitakoy. Compatible OpenRouter et FluxAI. Auto backup + QR web.",
+  "description": "OkitakoyBot — Assistant WhatsApp professionnel basé sur GPT-4o (OpenRouter) et FluxAI. Créé par Précieux Okitakoy.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,7 +10,7 @@
     "whatsapp-web.js": "^1.19.0",
     "qrcode-terminal": "^0.12.0",
     "qrcode": "^1.5.3",
-    "axios": "^1.7.2",
+    "axios": "^1.6.0",
     "express": "^4.18.2",
     "node-fetch": "^3.3.2",
     "form-data": "^4.0.0",
