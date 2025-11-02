@@ -1,26 +1,28 @@
 {
-  "name": "okitakoybot-render-pro",
-  "version": "2.0.0",
-  "description": "OkitakoyBot — Assistant WhatsApp professionnel basé sur GPT-4o (OpenRouter) et FluxAI. Créé par Précieux Okitakoy.",
+  "name": "okitakoybot",
+  "version": "3.0.0",
+  "description": "OkitakoyBot — Assistant WhatsApp professionnel avec IA (OpenRouter)",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "whatsapp-web.js": "^1.19.0",
-    "qrcode-terminal": "^0.12.0",
-    "qrcode": "^1.5.3",
-    "axios": "^1.6.0",
-    "express": "^4.18.2",
-    "node-fetch": "^3.3.2",
-    "form-data": "^4.0.0",
-    "archiver": "^5.3.1",
-    "multer": "^1.4.5-lts.1",
-    "extract-zip": "^2.0.1"
-  },
-  "engines": {
-    "node": ">=18"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "author": "Précieux Okitakoy",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "axios": "^1.7.9",
+    "chalk": "^5.3.0",
+    "express": "^4.21.1",
+    "extract-zip": "^2.0.1",
+    "multer": "^1.4.5-lts.1",
+    "path": "^0.12.7",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
 }
