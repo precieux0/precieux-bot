@@ -1,28 +1,17 @@
-# ---- Étape 1 : base Node.js ----
-FROM node:18
+# Image de base
+FROM node:22-slim
 
-# Créer le répertoire de travail
 WORKDIR /app
 
-# Copier les fichiers de configuration
+# Installation des dépendances
 COPY package*.json ./
+RUN npm install
 
-# Installer uniquement les dépendances nécessaires à la production
-RUN npm install --production
-
-# Copier le reste du code
+# Copie du projet
 COPY . .
 
-# Créer le dossier pour les sauvegardes
-RUN mkdir -p /app/session-backups
-
-# Exposer le port pour le serveur Express (Render s’en sert)
+# Expose le port 3000
 EXPOSE 3000
 
-# Empêcher Render de couper le processus en gardant le bot actif
-ENV NODE_ENV=production
-ENV SHOW_QR_WEB=true
-ENV AUTO_BACKUP=true
-
-# Commande de démarrage
+# Démarre le bot
 CMD ["npm", "start"]
