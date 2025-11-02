@@ -1,30 +1,28 @@
-# ==============================================================
-#  OkitakoyBot — Dockerfile stable pour Node.js 18+
-#  Inclut : dépendances, session persistante, keep-alive
-# ==============================================================
-FROM node:18-slim
+# ---- Étape 1 : base Node.js ----
+FROM node:18
 
-# Crée le dossier de l'application
+# Créer le répertoire de travail
 WORKDIR /app
 
-# Copie des fichiers nécessaires
+# Copier les fichiers de configuration
 COPY package*.json ./
 
-# Installation des dépendances
+# Installer uniquement les dépendances nécessaires à la production
 RUN npm install --production
 
-# Copie du reste du projet
+# Copier le reste du code
 COPY . .
 
-# Création des dossiers nécessaires
-RUN mkdir -p /app/session-backups /app/logs
+# Créer le dossier pour les sauvegardes
+RUN mkdir -p /app/session-backups
 
-# Expose le port web pour Render ou healthcheck
+# Exposer le port pour le serveur Express (Render s’en sert)
 EXPOSE 3000
 
-# Garde le conteneur toujours actif avec un healthcheck
-HEALTHCHECK --interval=1m --timeout=10s \
-  CMD node -e "require('http').get('http://localhost:3000', res => res.statusCode === 200 || process.exit(1));"
+# Empêcher Render de couper le processus en gardant le bot actif
+ENV NODE_ENV=production
+ENV SHOW_QR_WEB=true
+ENV AUTO_BACKUP=true
 
-# Démarrage du bot
+# Commande de démarrage
 CMD ["npm", "start"]
