@@ -1,21 +1,30 @@
-# Dockerfile pour OkitakoyBot — WhatsApp IA professionnelle
-FROM node:18
+# ==============================================================
+#  OkitakoyBot — Dockerfile stable pour Node.js 18+
+#  Inclut : dépendances, session persistante, keep-alive
+# ==============================================================
+FROM node:18-slim
 
-# Créer le répertoire de l’application
+# Crée le dossier de l'application
 WORKDIR /app
 
-# Copier les fichiers package et installer les dépendances
+# Copie des fichiers nécessaires
 COPY package*.json ./
+
+# Installation des dépendances
 RUN npm install --production
 
-# Copier tout le reste du projet
+# Copie du reste du projet
 COPY . .
 
-# Créer le dossier de sauvegarde des sessions
-RUN mkdir -p /app/session-backups
+# Création des dossiers nécessaires
+RUN mkdir -p /app/session-backups /app/logs
 
-# Exposer le port utilisé par Express
+# Expose le port web pour Render ou healthcheck
 EXPOSE 3000
 
-# Démarrer le bot
+# Garde le conteneur toujours actif avec un healthcheck
+HEALTHCHECK --interval=1m --timeout=10s \
+  CMD node -e "require('http').get('http://localhost:3000', res => res.statusCode === 200 || process.exit(1));"
+
+# Démarrage du bot
 CMD ["npm", "start"]
