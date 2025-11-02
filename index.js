@@ -1,10 +1,14 @@
 /**
- * OkitakoyBot — WhatsApp bot complet (Render)
- * Compatible OpenRouter (texte + image + résumé + génération + backup auto)
+ * OkitakoyBot — WhatsApp bot professionnel avec IA (OpenRouter)
  * Auteur : Précieux Okitakoy
+ * Fonctions :
+ *  - QR code visible sur page web
+ *  - Sauvegarde automatique de session
+ *  - Réponses IA (GPT-4 via OpenRouter)
+ *  - Commandes: ping, help, summarize, image
  */
 
-const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
+const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const QRCode = require("qrcode");
 const express = require("express");
@@ -19,243 +23,183 @@ const upload = multer({ dest: "uploads/" });
 const app = express();
 app.use(express.json());
 
+// === Variables principales ===
 const BOT_NAME = "OkitakoyBot";
-const WELCOME_TEXT =
-  "Salut 👋, je suis OkitakoyBot 🤖 — le bot personnel de *Précieux Okitakoy*! Tape *help* pour voir ce que je peux faire.";
+const WELCOME_TEXT = "Bonjour, ici OkitakoyBot 🤖 — votre assistant virtuel professionnel. Tapez *help* pour voir les commandes disponibles.";
 const AUTH_DIR = path.resolve("./.wwebjs_auth");
 const BACKUP_DIR = path.resolve("./session-backups");
 const EXPORT_TOKEN = process.env.EXPORT_TOKEN || "change_this_token";
 const AUTO_BACKUP = (process.env.AUTO_BACKUP || "true").toLowerCase() !== "false";
 const SHOW_QR_WEB = (process.env.SHOW_QR_WEB || "false").toLowerCase() === "true";
+const OPENROUTER_KEY = process.env.OPENAI_API_KEY; // clé OpenRouter
+const FLUX_KEY = process.env.FLUXAI_API_KEY;
 
-// --- créer le dossier de backup si manquant ---
+// === Préparation des dossiers ===
 if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
-// --- initialisation du client WhatsApp ---
+// === Initialisation du client WhatsApp ===
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: "okitakoy-bot" }),
   puppeteer: { headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] },
 });
 
-// --- variable QR ---
 let latestQr = "";
 
-// --- gestion du QR ---
+// === QR Code ===
 client.on("qr", async (qr) => {
-  console.log("--- QR RECEIVED ---");
+  console.log("--- QR reçu ---");
   qrcode.generate(qr, { small: true });
   try {
     latestQr = await QRCode.toDataURL(qr);
   } catch (err) {
-    console.error("QR generation error", err);
+    console.error("Erreur QR", err);
   }
 });
 
-// --- authentification ---
-client.on("authenticated", () => console.log("✅ AUTHENTICATED"));
-client.on("auth_failure", (msg) => console.error("❌ AUTH FAILURE", msg));
-client.on("disconnected", (reason) => console.log("🔌 DISCONNECTED", reason));
+client.on("authenticated", () => console.log("✅ Authentifié avec succès"));
+client.on("auth_failure", (msg) => console.error("❌ Échec d'authentification", msg));
+client.on("disconnected", (reason) => console.log("🔌 Déconnecté :", reason));
 
 client.on("ready", () => {
-  console.log(`${BOT_NAME} prêt ✅`);
+  console.log(`${BOT_NAME} est prêt ✅`);
   if (AUTO_BACKUP) {
     try {
       autoExportSession();
     } catch (e) {
-      console.error("Auto export session error", e);
+      console.error("Erreur de sauvegarde automatique", e);
     }
   }
 });
 
-// --- gestion des messages ---
-const SEEN_FILE = path.resolve("./seen.json");
-let seen = {};
-try {
-  if (fs.existsSync(SEEN_FILE)) seen = JSON.parse(fs.readFileSync(SEEN_FILE));
-} catch {
-  seen = {};
-}
-
+// === Gestion des messages ===
 client.on("message", async (msg) => {
   try {
-    const body = (msg.body || "").trim();
+    const body = msg.body?.trim() || "";
     const lower = body.toLowerCase();
-    const chatId = msg.from || "unknown";
-
-    if (!seen[chatId]) {
-      await msg.reply(WELCOME_TEXT);
-      seen[chatId] = true;
-      fs.writeFileSync(SEEN_FILE, JSON.stringify(seen, null, 2));
-    }
+    const chatId = msg.from;
 
     // Commande de base
-    if (lower === "ping") return msg.reply("pong 🏓");
-
+    if (lower === "ping") return msg.reply("pong");
     if (["help", "aide"].includes(lower)) {
-      return msg.reply(
-        `📘 *Commandes disponibles:*\n\n` +
-          `- ping → Vérifie la connexion\n` +
-          `- summarize: [texte] → Résume un texte\n` +
-          `- image: [prompt] → Génère une image\n` +
-          `- analyze: [photo ou lien] → Analyse et décrit une image\n\n` +
-          `Bot maintenu par *Précieux Okitakoy*.`
-      );
+      return msg.reply(`📋 Commandes disponibles :
+- *ping* → test du bot
+- *summarize: texte* → résume un texte
+- *image: prompt* → génère une image (si FLUXAI_API_KEY configurée)
+- *anything else* → le bot répond avec intelligence professionnelle.`);
     }
 
-    // Résumé de texte
-    if (lower.startsWith("summarize:") || lower.startsWith("résume:") || lower.startsWith("resumer:")) {
+    if (lower.startsWith("summarize:")) {
       const text = body.split(":").slice(1).join(":").trim();
-      if (!text) return msg.reply("Envoie: summarize: [ton texte]");
-      await msg.reply("🧠 Je résume ton texte...");
+      if (!text) return msg.reply("Format : summarize: [ton texte]");
+      await msg.reply("⏳ Résumé en cours...");
       const summary = await summarizeWithOpenRouter(text);
       return msg.reply(summary);
     }
 
-    // Génération d'image avec FluxAI
     if (lower.startsWith("image:")) {
       const prompt = body.split(":").slice(1).join(":").trim();
-      if (!prompt) return msg.reply("Envoie: image: [ton prompt]");
-      await msg.reply("🎨 Génération d'image en cours...");
+      if (!prompt) return msg.reply("Format : image: [ton prompt]");
+      await msg.reply("🖼️ Génération d'image...");
       try {
         const imgUrl = await generateImageFluxAI(prompt);
-        return msg.reply(`🖼️ Image générée:\n${imgUrl}`);
-      } catch (e) {
-        console.error(e);
+        return msg.reply(`Image générée : ${imgUrl}`);
+      } catch {
         return msg.reply("Erreur lors de la génération d'image.");
       }
     }
 
-    // Analyse d'image
-    if (lower.startsWith("analyze:") || msg.hasMedia) {
-      await msg.reply("🔍 Analyse de l'image en cours...");
-      let imageUrl;
-
-      if (msg.hasMedia) {
-        const media = await msg.downloadMedia();
-        if (!media || !media.data) return msg.reply("Impossible de lire cette image.");
-        const filePath = `./uploads/${Date.now()}.jpg`;
-        fs.writeFileSync(filePath, Buffer.from(media.data, "base64"));
-        const base64data = media.data;
-        const result = await analyzeImageWithOpenRouter(base64data);
-        fs.unlinkSync(filePath);
-        return msg.reply(result);
-      } else {
-        const prompt = body.split(":").slice(1).join(":").trim();
-        if (!prompt.startsWith("http")) return msg.reply("Envoie une image ou un lien vers une image !");
-        const result = await analyzeImageWithOpenRouter(prompt);
-        return msg.reply(result);
-      }
-    }
-
-    if (lower.includes("bonjour") || lower.includes("salut")) {
-      return msg.reply("Salut 👋! Tape *help* pour voir mes commandes.");
+    // 🤖 Réponse automatique IA à tous les autres messages
+    if (body.length > 0) {
+      const reply = await generateAIReply(body);
+      if (reply) await msg.reply(reply);
     }
   } catch (err) {
-    console.error("message handler error", err);
+    console.error("Erreur message:", err);
   }
 });
 
-// ---------- Fonctions OpenRouter ----------
+// === Fonctions IA ===
 async function summarizeWithOpenRouter(text) {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return "❌ Clé OpenRouter manquante.";
+  if (!OPENROUTER_KEY) return "❌ Clé OpenRouter manquante.";
   try {
-    const resp = await axios.post(
+    const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "Tu es un assistant qui résume les textes clairement en français." },
-          { role: "user", content: text },
-        ],
-        max_tokens: 400,
+        model: "openai/gpt-4o-mini",
+        messages: [{ role: "user", content: `Résume ce texte en français de manière concise et professionnelle:\n\n${text}` }],
+        max_tokens: 300,
       },
-      { headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" } }
+      { headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, "Content-Type": "application/json" } }
     );
-    return resp.data?.choices?.[0]?.message?.content || "Aucun résumé reçu.";
-  } catch (e) {
-    console.error("OpenRouter error", e.response?.data || e.message);
-    return "Erreur lors de la requête OpenRouter.";
-  }
-}
-
-async function analyzeImageWithOpenRouter(image) {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return "Clé OpenRouter manquante.";
-  try {
-    const messages = [
-      {
-        role: "system",
-        content:
-          "Tu es un expert en analyse d’images. Décris l’image en détail (objets, ambiance, contexte) puis donne un résumé rapide à la fin.",
-      },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Décris cette image en détail et résume-la brièvement à la fin." },
-          typeof image === "string" && image.startsWith("http")
-            ? { type: "image_url", image_url: image }
-            : { type: "image_base64", image_base64: image },
-        ],
-      },
-    ];
-
-    const resp = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      { model: "gpt-4o", messages },
-      { headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" } }
-    );
-    return resp.data?.choices?.[0]?.message?.content || "Aucune description trouvée.";
+    return response.data?.choices?.[0]?.message?.content || "Aucun résumé reçu.";
   } catch (e) {
     console.error("Erreur OpenRouter:", e.response?.data || e.message);
-    return "Erreur lors de l’analyse d’image.";
+    return "Erreur lors du résumé.";
   }
 }
 
-// ---------- Génération d'image (FluxAI) ----------
+async function generateAIReply(message) {
+  if (!OPENROUTER_KEY) return "Clé OpenRouter non configurée.";
+  try {
+    const response = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "openai/gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "Tu es OkitakoyBot, un assistant WhatsApp professionnel, poli, précis et utile. Réponds de manière claire, en français formel.",
+          },
+          { role: "user", content: message },
+        ],
+      },
+      { headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, "Content-Type": "application/json" } }
+    );
+    return response.data?.choices?.[0]?.message?.content || "";
+  } catch (e) {
+    console.error("Erreur OpenRouter:", e.response?.data || e.message);
+    return "Je n’ai pas pu traiter votre message.";
+  }
+}
+
+// === Génération image (FluxAI) ===
 async function generateImageFluxAI(prompt) {
-  const key = process.env.FLUXAI_API_KEY;
-  if (!key) throw new Error("FLUXAI_API_KEY manquant");
+  if (!FLUX_KEY) throw new Error("FLUXAI_API_KEY manquante");
   const resp = await axios.post(
     "https://api.flux.ai/v1/generate",
     { prompt },
-    { headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" } }
+    { headers: { Authorization: `Bearer ${FLUX_KEY}`, "Content-Type": "application/json" } }
   );
   return resp.data?.url || "https://example.com/image-placeholder.png";
 }
 
-// ---------- Sauvegarde automatique ----------
+// === Sauvegarde automatique ===
 function autoExportSession() {
-  if (!fs.existsSync(AUTH_DIR)) return console.log("Aucune session à sauvegarder.");
-  if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  if (!fs.existsSync(AUTH_DIR)) return;
   const zipName = `session-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
   const outputPath = path.join(BACKUP_DIR, zipName);
   const output = fs.createWriteStream(outputPath);
   const archive = archiver("zip", { zlib: { level: 9 } });
-  archive.on("error", (err) => {
-    throw err;
-  });
   archive.pipe(output);
   archive.directory(AUTH_DIR, false);
   archive.finalize();
-  output.on("close", () => console.log(`Session exportée automatiquement → ${outputPath}`));
+  output.on("close", () => console.log(`💾 Session sauvegardée : ${outputPath}`));
 }
 
-// ---------- Serveur web ----------
+// === Serveur Express ===
 app.get("/", (req, res) => {
-  if (SHOW_QR_WEB && latestQr) {
-    res.send(`<center><h2>${BOT_NAME}</h2><p>Scanne ce QR pour connecter le bot :</p><img src="${latestQr}" width="300"/></center>`);
-  } else {
-    res.send(`${BOT_NAME} en ligne ✅`);
-  }
+  if (SHOW_QR_WEB && latestQr)
+    res.send(`<center><h2>${BOT_NAME}</h2><p>Scanne ce QR :</p><img src="${latestQr}" width="300"/></center>`);
+  else res.send(`${BOT_NAME} actif ✅`);
 });
 
 app.get("/qr", (req, res) => {
-  if (!latestQr) return res.send("QR non encore généré...");
+  if (!latestQr) return res.send("QR non généré...");
   res.send(`<img src="${latestQr}" width="300"/>`);
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`🌐 Serveur web actif sur le port ${port}`));
+app.listen(port, () => console.log(`🌐 Serveur web lancé sur le port ${port}`));
 
 client.initialize();
