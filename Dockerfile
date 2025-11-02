@@ -1,46 +1,42 @@
-# ================================
-# 🧩 Étape 1 : Utilisation d'une image Node stable
-# ================================
-FROM node:22.16.0
+# Étape 1 : Image de base Node.js
+FROM node:20-slim
 
-# ================================
-# 📁 Étape 2 : Création du dossier de travail
-# ================================
+# Étape 2 : Variables d'environnement
+ENV NODE_ENV=production \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    SHOW_QR_WEB=true \
+    AUTO_BACKUP=true
+
+# Étape 3 : Installation des dépendances système
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-common \
+    chromium-driver \
+    fonts-liberation \
+    libatk-bridge2.0-0 \
+    libnss3 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    xdg-utils \
+    wget \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Étape 4 : Dossier de travail
 WORKDIR /app
 
-# ================================
-# 📦 Étape 3 : Copie des fichiers nécessaires
-# ================================
+# Étape 5 : Copie des fichiers
 COPY package*.json ./
+RUN npm install --omit=dev
 
-# ================================
-# ⚙️ Étape 4 : Installation des dépendances
-# ================================
-RUN npm install --production
-
-# ================================
-# 📂 Étape 5 : Copie du code source
-# ================================
 COPY . .
 
-# ================================
-# 🔐 Étape 6 : Préparation du dossier de session
-# ================================
-RUN mkdir -p session-backups
-RUN touch session-backups/.gitkeep
-
-# ================================
-# 🛠️ Étape 7 : Variables d'environnement (optionnelles)
-# ================================
-ENV NODE_ENV=production
-ENV PORT=3000
-
-# ================================
-# 🌍 Étape 8 : Exposition du port
-# ================================
+# Étape 6 : Port exposé
 EXPOSE 3000
 
-# ================================
-# 🔁 Étape 9 : Lancement automatique + Keep Alive
-# ================================
-CMD [ "npm", "start" ]
+# Étape 7 : Démarrage
+CMD ["node", "index.js"]
