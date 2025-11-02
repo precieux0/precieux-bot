@@ -1,18 +1,7 @@
 /**
- * ===============================================================
- *  OkitakoyBot — WhatsApp Bot Professionnel avec IA (OpenRouter)
- *  Auteur : Précieux Okitakoy
- *  Version : 3.0 Stable Render Edition
- * ===============================================================
- *  ⚙️  Fonctionnalités :
- *   - QR code visible sur page web (Render)
- *   - Sauvegarde automatique de session
- *   - Keep-alive (connexion illimitée)
- *   - Reconnexion automatique en cas de crash
- *   - Journalisation colorée + sauvegarde journalière
- *   - Commandes : ping, help, summarize, image
- *   - Réponses IA automatiques via OpenRouter (GPT-4)
- * ===============================================================
+ * OkitakoyBot — WhatsApp bot professionnel avec IA (OpenRouter)
+ * Auteur : Précieux Okitakoy
+ * Version : Stable — Keep Alive + Auto Reconnect
  */
 
 const { Client, LocalAuth } = require("whatsapp-web.js");
@@ -25,84 +14,75 @@ const archiver = require("archiver");
 const multer = require("multer");
 const extract = require("extract-zip");
 const axios = require("axios");
-const chalk = require("chalk");
+const chalk = require("chalk"); // ✅ Correctif Chalk
 
+// === Express + Middleware ===
 const upload = multer({ dest: "uploads/" });
 const app = express();
 app.use(express.json());
 
 // === Variables principales ===
 const BOT_NAME = "OkitakoyBot";
-const WELCOME_TEXT =
-  "Bonjour, ici OkitakoyBot 🤖 — votre assistant virtuel professionnel. Tapez *help* pour voir les commandes disponibles.";
+const WELCOME_TEXT = "Bonjour, ici OkitakoyBot 🤖 — votre assistant virtuel professionnel. Tapez *help* pour voir les commandes disponibles.";
 const AUTH_DIR = path.resolve("./.wwebjs_auth");
 const BACKUP_DIR = path.resolve("./session-backups");
-const LOG_DIR = path.resolve("./logs");
 const EXPORT_TOKEN = process.env.EXPORT_TOKEN || "change_this_token";
 const AUTO_BACKUP = (process.env.AUTO_BACKUP || "true").toLowerCase() !== "false";
 const SHOW_QR_WEB = (process.env.SHOW_QR_WEB || "false").toLowerCase() === "true";
 const OPENROUTER_KEY = process.env.OPENAI_API_KEY;
 const FLUX_KEY = process.env.FLUXAI_API_KEY;
+const PORT = process.env.PORT || 3000;
 
 // === Préparation des dossiers ===
-[BACKUP_DIR, LOG_DIR].forEach((dir) => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
-// === Logger personnalisé ===
-function log(type, msg) {
-  const date = new Date();
-  const timestamp = date.toISOString().replace("T", " ").split(".")[0];
-  let color;
-  switch (type) {
-    case "INFO":
-      color = chalk.green;
-      break;
-    case "WARN":
-      color = chalk.yellow;
-      break;
-    case "ERROR":
-      color = chalk.red;
-      break;
-    default:
-      color = chalk.cyan;
-  }
-  console.log(color(`[${timestamp}] [${type}] ${msg}`));
-
-  const logFile = path.join(LOG_DIR, `okibot-${date.toISOString().slice(0, 10)}.log`);
-  fs.appendFileSync(logFile, `[${timestamp}] [${type}] ${msg}\n`);
-}
-
-// === Initialisation du client WhatsApp ===
+// === Client WhatsApp ===
 let client;
+let latestQr = "";
 
 function initClient() {
   client = new Client({
     authStrategy: new LocalAuth({ clientId: "okitakoy-bot" }),
     puppeteer: {
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-extensions", "--disable-gpu"],
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     },
   });
 
-  let latestQr = "";
-
+  // === QR Code ===
   client.on("qr", async (qr) => {
-    log("INFO", "QR code reçu");
+    console.log(chalk.yellow("📱 QR reçu, scannez-le pour connecter le bot"));
     qrcode.generate(qr, { small: true });
-    latestQr = await QRCode.toDataURL(qr).catch(() => "");
+    try {
+      latestQr = await QRCode.toDataURL(qr);
+    } catch (err) {
+      console.error("Erreur QR:", err);
+    }
   });
 
-  client.on("authenticated", () => log("INFO", "✅ Authentifié avec succès"));
-  client.on("auth_failure", (msg) => log("ERROR", `❌ Échec d'authentification: ${msg}`));
-  client.on("ready", () => {
-    log("INFO", `${BOT_NAME} est prêt et connecté ✅`);
-    if (AUTO_BACKUP) autoExportSession();
-  });
+  // === Authentification ===
+  client.on("authenticated", () => console.log(chalk.green("✅ Authentifié avec succès")));
+  client.on("auth_failure", (msg) => console.error(chalk.red("❌ Échec d'authentification"), msg));
 
+  // === Déconnexion automatique → reconnexion immédiate ===
   client.on("disconnected", (reason) => {
-    log("WARN", `Déconnecté (${reason}) → tentative de reconnexion...`);
-    setTimeout(() => initClient(), 5000);
+    console.log(chalk.red("🔌 Déconnecté:", reason));
+    console.log(chalk.cyan("♻️ Tentative de reconnexion dans 5 secondes..."));
+    setTimeout(() => {
+      initClient();
+      client.initialize();
+    }, 5000);
+  });
+
+  client.on("ready", () => {
+    console.log(chalk.greenBright(`🤖 ${BOT_NAME} est prêt et connecté ✅`));
+    if (AUTO_BACKUP) {
+      try {
+        autoExportSession();
+      } catch (e) {
+        console.error("Erreur de sauvegarde automatique", e);
+      }
+    }
   });
 
   // === Gestion des messages ===
@@ -111,16 +91,13 @@ function initClient() {
       const body = msg.body?.trim() || "";
       const lower = body.toLowerCase();
 
-      if (lower === "ping") return msg.reply("pong ✅");
-
+      if (lower === "ping") return msg.reply("pong");
       if (["help", "aide"].includes(lower)) {
-        return msg.reply(
-          `📋 Commandes disponibles :
+        return msg.reply(`📋 Commandes disponibles :
 - *ping* → test du bot
 - *summarize: texte* → résume un texte
-- *image: prompt* → génère une image
-- Toute autre phrase → réponse intelligente IA.`
-        );
+- *image: prompt* → génère une image (si clé FLUX configurée)
+- Toute autre phrase → réponse IA professionnelle.`);
       }
 
       if (lower.startsWith("summarize:")) {
@@ -143,57 +120,36 @@ function initClient() {
         }
       }
 
+      // Réponse automatique intelligente
       if (body.length > 0) {
         const reply = await generateAIReply(body);
         if (reply) await msg.reply(reply);
       }
     } catch (err) {
-      log("ERROR", `Erreur message: ${err.message}`);
+      console.error("Erreur message:", err);
     }
   });
 
-  // === Keep-alive constant ===
-  setInterval(() => {
-    log("INFO", "💓 Ping keep-alive pour maintenir la session ouverte.");
-    client.getChats().catch(() => {});
-  }, 1000 * 60 * 5); // toutes les 5 minutes
-
-  // === Serveur Express (QR code + keep-alive web) ===
-  app.get("/", (req, res) => {
-    if (SHOW_QR_WEB && latestQr) {
-      res.send(`<center><h2>${BOT_NAME}</h2><p>Scannez ce QR :</p><img src="${latestQr}" width="300"/></center>`);
-    } else {
-      res.send(`${BOT_NAME} en ligne ✅`);
-    }
-  });
-
-  app.get("/qr", (req, res) => {
-    if (!latestQr) return res.send("QR non généré...");
-    res.send(`<img src="${latestQr}" width="300"/>`);
-  });
-
-  const port = process.env.PORT || 3000;
-  app.listen(port, () => log("INFO", `🌐 Serveur web lancé sur le port ${port}`));
-
+  // === Initialisation du client ===
   client.initialize();
 }
 
-// === Fonctions auxiliaires ===
+// === Fonctions IA ===
 async function summarizeWithOpenRouter(text) {
   if (!OPENROUTER_KEY) return "❌ Clé OpenRouter manquante.";
   try {
-    const response = await axios.post(
+    const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
         model: "openai/gpt-4o-mini",
-        messages: [{ role: "user", content: `Résume ce texte en français de manière concise:\n\n${text}` }],
+        messages: [{ role: "user", content: `Résume ce texte en français, de manière concise et professionnelle :\n\n${text}` }],
         max_tokens: 300,
       },
       { headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, "Content-Type": "application/json" } }
     );
-    return response.data?.choices?.[0]?.message?.content || "Aucun résumé reçu.";
+    return res.data?.choices?.[0]?.message?.content || "Aucun résumé reçu.";
   } catch (e) {
-    log("ERROR", `Erreur OpenRouter: ${e.message}`);
+    console.error("Erreur OpenRouter:", e.response?.data || e.message);
     return "Erreur lors du résumé.";
   }
 }
@@ -201,38 +157,35 @@ async function summarizeWithOpenRouter(text) {
 async function generateAIReply(message) {
   if (!OPENROUTER_KEY) return "Clé OpenRouter non configurée.";
   try {
-    const response = await axios.post(
+    const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
         model: "openai/gpt-4o-mini",
         messages: [
-          {
-            role: "system",
-            content:
-              "Tu es OkitakoyBot, un assistant WhatsApp professionnel, poli et utile. Réponds clairement en français formel.",
-          },
+          { role: "system", content: "Tu es OkitakoyBot, un assistant WhatsApp professionnel, précis et courtois. Réponds toujours en français formel." },
           { role: "user", content: message },
         ],
       },
       { headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, "Content-Type": "application/json" } }
     );
-    return response.data?.choices?.[0]?.message?.content || "";
+    return res.data?.choices?.[0]?.message?.content || "";
   } catch (e) {
-    log("ERROR", `Erreur IA: ${e.message}`);
+    console.error("Erreur OpenRouter:", e.response?.data || e.message);
     return "Je n’ai pas pu traiter votre message.";
   }
 }
 
 async function generateImageFluxAI(prompt) {
   if (!FLUX_KEY) throw new Error("FLUXAI_API_KEY manquante");
-  const resp = await axios.post(
+  const res = await axios.post(
     "https://api.flux.ai/v1/generate",
     { prompt },
     { headers: { Authorization: `Bearer ${FLUX_KEY}`, "Content-Type": "application/json" } }
   );
-  return resp.data?.url || "https://example.com/image-placeholder.png";
+  return res.data?.url || "https://example.com/image-placeholder.png";
 }
 
+// === Sauvegarde automatique ===
 function autoExportSession() {
   if (!fs.existsSync(AUTH_DIR)) return;
   const zipName = `session-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
@@ -242,8 +195,30 @@ function autoExportSession() {
   archive.pipe(output);
   archive.directory(AUTH_DIR, false);
   archive.finalize();
-  output.on("close", () => log("INFO", `💾 Session sauvegardée : ${outputPath}`));
+  output.on("close", () => console.log(chalk.cyan(`💾 Session sauvegardée : ${outputPath}`)));
 }
 
-// === Démarrage du bot ===
+// === Keep Alive ===
+setInterval(() => {
+  axios
+    .get(`http://localhost:${PORT}`)
+    .then(() => console.log(chalk.gray("🔁 Keep-alive ping")))
+    .catch(() => {});
+}, 1000 * 60 * 4); // toutes les 4 minutes
+
+// === Serveur Express ===
+app.get("/", (req, res) => {
+  if (SHOW_QR_WEB && latestQr)
+    res.send(`<center><h2>${BOT_NAME}</h2><p>Scanne ce QR :</p><img src="${latestQr}" width="300"/></center>`);
+  else res.send(`${BOT_NAME} est actif ✅`);
+});
+
+app.get("/qr", (req, res) => {
+  if (!latestQr) return res.send("QR non généré...");
+  res.send(`<img src="${latestQr}" width="300"/>`);
+});
+
+app.listen(PORT, () => console.log(chalk.green(`🌐 Serveur web lancé sur le port ${PORT}`)));
+
+// === Démarrage ===
 initClient();
