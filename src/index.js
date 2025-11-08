@@ -1,10 +1,10 @@
 /**
- * OkitakoyBot — WhatsApp Bot professionnel (avec IA OpenRouter)
+ * OkitakoyBot — WhatsApp Bot professionnel (avec IA Google Gemini)
  * Auteur : Précieux Okitakoy
  * Fonctionnalités :
  *  ✅ QR code web
  *  ✅ Keep-alive + reconnexion automatique
- *  ✅ Réponses IA (OpenRouter)
+ *  ✅ Réponses IA (Google Gemini)
  *  ✅ Sauvegarde automatique
  *  ✅ Commandes : ping, help, summarize, image
  */
@@ -19,6 +19,7 @@ const axios = require("axios");
 const archiver = require("archiver");
 const multer = require("multer");
 const extract = require("extract-zip");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
@@ -26,7 +27,7 @@ app.use(express.json());
 
 // === CONFIGURATION PRINCIPALE ===
 const BOT_NAME = "OkitakoyBot";
-const WELCOME_TEXT = "Bonjour 👋, je suis *OkitakoyBot*, l’assistant professionnel de Précieux Okitakoy. Tapez *help* pour voir les commandes disponibles.";
+const WELCOME_TEXT = "Bonjour 👋, je suis *OkitakoyBot*, l'assistant professionnel de Précieux Okitakoy. Tapez *help* pour voir les commandes disponibles.";
 const AUTH_DIR = path.resolve("./.wwebjs_auth");
 const BACKUP_DIR = path.resolve("./session-backups");
 const PORT = process.env.PORT || 3000;
@@ -34,8 +35,23 @@ const PORT = process.env.PORT || 3000;
 const SHOW_QR_WEB = (process.env.SHOW_QR_WEB || "true").toLowerCase() === "true";
 const AUTO_BACKUP = (process.env.AUTO_BACKUP || "true").toLowerCase() === "true";
 const EXPORT_TOKEN = process.env.EXPORT_TOKEN || "change_this_token";
-const OPENROUTER_KEY = process.env.OPENAI_API_KEY; // Clé OpenRouter
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Clé Google Gemini
 const FLUX_KEY = process.env.FLUXAI_API_KEY;
+
+// === INITIALISATION DE GEMINI ===
+let genAI;
+let geminiModel;
+if (GEMINI_API_KEY) {
+  try {
+    genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    geminiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
+    console.log("✅ Google Gemini initialisé avec succès");
+  } catch (error) {
+    console.error("❌ Erreur lors de l'initialisation de Gemini:", error);
+  }
+} else {
+  console.warn("⚠️ Clé Gemini manquante - les fonctionnalités IA seront désactivées");
+}
 
 // === PRÉPARATION DES DOSSIERS ===
 if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
@@ -67,7 +83,7 @@ client.on("ready", () => {
 });
 
 client.on("authenticated", () => console.log("🔐 Authentifié avec succès"));
-client.on("auth_failure", (msg) => console.error("❌ Échec d’authentification :", msg));
+client.on("auth_failure", (msg) => console.error("❌ Échec d'authentification :", msg));
 client.on("disconnected", async (reason) => {
   console.error("⚠️ Déconnexion détectée :", reason);
   isReady = false;
@@ -106,14 +122,14 @@ client.on("message", async (msg) => {
       const text = body.split(":").slice(1).join(":").trim();
       if (!text) return msg.reply("Format attendu : summarize: [ton texte]");
       await msg.reply("✍️ Résumé en cours...");
-      const summary = await summarizeWithOpenRouter(text);
+      const summary = await summarizeWithGemini(text);
       return msg.reply(summary);
     }
 
     if (lower.startsWith("image:")) {
       const prompt = body.split(":").slice(1).join(":").trim();
       if (!prompt) return msg.reply("Format attendu : image: [ton prompt]");
-      await msg.reply("🎨 Génération de l’image...");
+      await msg.reply("🎨 Génération de l'image...");
       const imgUrl = await generateImageFluxAI(prompt);
       return msg.reply(`🖼️ Image générée : ${imgUrl}`);
     }
@@ -128,47 +144,34 @@ client.on("message", async (msg) => {
   }
 });
 
-// === FONCTIONS IA ===
-async function summarizeWithOpenRouter(text) {
-  if (!OPENROUTER_KEY) return "❌ Clé OpenRouter manquante.";
+// === FONCTIONS IA AVEC GEMINI ===
+async function summarizeWithGemini(text) {
+  if (!GEMINI_API_KEY) return "❌ Clé Google Gemini manquante.";
+  if (!geminiModel) return "❌ Modèle Gemini non initialisé.";
+  
   try {
-    const res = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: "openai/gpt-4o-mini",
-        messages: [{ role: "user", content: `Résume ce texte en français professionnellement :\n${text}` }],
-      },
-      { headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, "Content-Type": "application/json" } }
-    );
-    return res.data?.choices?.[0]?.message?.content || "Aucun résumé généré.";
-  } catch (e) {
-    console.error("Erreur résumé:", e.response?.data || e.message);
-    return "Erreur lors du résumé.";
+    const prompt = `Résume ce texte en français professionnellement, de manière concise et claire :\n\n${text}`;
+    const result = await geminiModel.generateContent(prompt);
+    const response = await result.response;
+    return response.text() || "Aucun résumé généré.";
+  } catch (error) {
+    console.error("Erreur résumé Gemini:", error);
+    return "Erreur lors du résumé avec Gemini.";
   }
 }
 
 async function generateAIReply(message) {
-  if (!OPENROUTER_KEY) return "Clé OpenRouter manquante.";
+  if (!GEMINI_API_KEY) return "❌ Clé Google Gemini manquante.";
+  if (!geminiModel) return "❌ Modèle Gemini non initialisé.";
+  
   try {
-    const res = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: "openai/gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Tu es OkitakoyBot, un assistant professionnel WhatsApp. Réponds toujours en français clair et respectueux, comme un conseiller professionnel.",
-          },
-          { role: "user", content: message },
-        ],
-      },
-      { headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, "Content-Type": "application/json" } }
-    );
-    return res.data?.choices?.[0]?.message?.content || "";
-  } catch (e) {
-    console.error("Erreur OpenRouter:", e.response?.data || e.message);
-    return "Je n’ai pas pu répondre à votre message.";
+    const prompt = `Tu es OkitakoyBot, un assistant professionnel WhatsApp. Réponds toujours en français clair et respectueux, comme un conseiller professionnel. Réponds à ce message : ${message}`;
+    const result = await geminiModel.generateContent(prompt);
+    const response = await result.response;
+    return response.text() || "Je n'ai pas pu générer de réponse.";
+  } catch (error) {
+    console.error("Erreur Gemini:", error);
+    return "Je n'ai pas pu répondre à votre message.";
   }
 }
 
