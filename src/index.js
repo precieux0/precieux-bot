@@ -1,279 +1,220 @@
 /**
- * OkitakoyBot — Système de parrainage simple
+ * OkitakoyBot — WhatsApp Bot professionnel (avec IA Google Gemini)
  * Auteur : Précieux Okitakoy
+ * Fonctionnalités :
+ *  ✅ QR code web
+ *  ✅ Keep-alive + reconnexion automatique
+ *  ✅ Réponses IA (Google Gemini)
+ *  ✅ Sauvegarde automatique
+ *  ✅ Commandes : ping, help, summarize, image
  */
 
-const makeWASocket = require('@whiskeysockets/baileys').default;
-const { useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const express = require('express');
-const qrcode = require('qrcode-terminal');
-const QRCode = require('qrcode');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
+const { Client, LocalAuth } = require("whatsapp-web.js");
+const qrcode = require("qrcode-terminal");
+const QRCode = require("qrcode");
+const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const axios = require("axios");
+const archiver = require("archiver");
+const multer = require("multer");
+const extract = require("extract-zip");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
+const upload = multer({ dest: "uploads/" });
 app.use(express.json());
-app.use(express.static('public'));
 
-// === CONFIGURATION ===
+// === CONFIGURATION PRINCIPALE ===
 const BOT_NAME = "OkitakoyBot";
+const WELCOME_TEXT = "Bonjour 👋, je suis *OkitakoyBot*, l'assistant professionnel de Précieux Okitakoy. Tapez *help* pour voir les commandes disponibles.";
+const AUTH_DIR = path.resolve("./.wwebjs_auth");
+const BACKUP_DIR = path.resolve("./session-backups");
 const PORT = process.env.PORT || 3000;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+const SHOW_QR_WEB = (process.env.SHOW_QR_WEB || "true").toLowerCase() === "true";
+const AUTO_BACKUP = (process.env.AUTO_BACKUP || "true").toLowerCase() === "true";
+const EXPORT_TOKEN = process.env.EXPORT_TOKEN || "change_this_token";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Clé Google Gemini
 const FLUX_KEY = process.env.FLUXAI_API_KEY;
 
-// === CODE DE PARRAINAGE FIXE ===
-const SPONSOR_CODE = "OKITAKOY"; // ⬅️ CODE FIXE - Changez-le !
-const connectedUsers = new Set();
-
-// === INITIALISATION GEMINI ===
-let genAI, geminiModel;
+// === INITIALISATION DE GEMINI ===
+let genAI;
+let geminiModel;
 if (GEMINI_API_KEY) {
-  genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  geminiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
+  try {
+    genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    geminiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
+    console.log("✅ Google Gemini initialisé avec succès");
+  } catch (error) {
+    console.error("❌ Erreur lors de l'initialisation de Gemini:", error);
+  }
+} else {
+  console.warn("⚠️ Clé Gemini manquante - les fonctionnalités IA seront désactivées");
 }
 
-let sock = null;
+// === PRÉPARATION DES DOSSIERS ===
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+// === INITIALISATION DU CLIENT WHATSAPP ===
+const client = new Client({
+  authStrategy: new LocalAuth({ clientId: "okitakoy-bot" }),
+  puppeteer: { headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] },
+});
+
 let latestQr = "";
 let isReady = false;
 
-// === FONCTION D'INITIALISATION BOT ===
-async function initializeBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('baileys_auth');
-  
-  sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true,
-    mobile: false,
-    browser: ['Chrome (Linux)', '', '']
-  });
-
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-    
-    if (qr) {
-      console.log('📱 QR Code reçu');
-      qrcode.generate(qr, { small: true });
-      latestQr = await QRCode.toDataURL(qr);
-    }
-    
-    if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
-      if (shouldReconnect) setTimeout(() => initializeBot(), 5000);
-    } else if (connection === 'open') {
-      console.log('✅ Connecté à WhatsApp!');
-      isReady = true;
-    }
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-  
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg.message || msg.key.fromMe) return;
-    
-    try {
-      const text = getMessageText(msg);
-      if (!text) return;
-      
-      const lower = text.toLowerCase();
-      const from = msg.key.remoteJid;
-      const userPhone = from.split('@')[0];
-      
-      // 🔥 VÉRIFICATION DU CODE DE PARRAINAGE
-      if (text.toUpperCase() === SPONSOR_CODE) {
-        if (connectedUsers.has(userPhone)) {
-          await sock.sendMessage(from, { 
-            text: '✅ *DÉJÀ CONNECTÉ!*\n\nVous êtes déjà connecté au bot. Tapez *help* pour voir les commandes.' 
-          });
-        } else {
-          connectedUsers.add(userPhone);
-          await sock.sendMessage(from, { 
-            text: `✅ *CONNEXION RÉUSSIE!*\n\nBienvenue ! Vous êtes maintenant connecté à *${BOT_NAME}*.\n\nTapez *help* pour voir les commandes disponibles. 🤖` 
-          });
-        }
-        return;
-      }
-      
-      // Si l'utilisateur n'est pas connecté
-      if (!connectedUsers.has(userPhone)) {
-        await sock.sendMessage(from, { 
-          text: `🔐 *CONNEXION REQUISE*\n\nPour utiliser le bot, vous devez d'abord vous connecter avec le code de parrainage.\n\n📱 *Code:* ${SPONSOR_CODE}\n\n_Envoyez ce code pour vous connecter_` 
-        });
-        return;
-      }
-      
-      // Commandes pour utilisateurs connectés
-      if (lower === 'ping') await sock.sendMessage(from, { text: 'pong 🏓' });
-      else if (lower === 'help') await sendHelpMessage(from);
-      else if (lower.startsWith('summarize:')) await handleSummarize(from, text);
-      else if (lower.startsWith('image:')) await handleImageGenerate(from, text);
-      else await handleAIResponse(from, text);
-      
-    } catch (error) {
-      console.error('Erreur message:', error);
-    }
-  });
-}
-
-function getMessageText(msg) {
-  return msg.message.conversation || 
-         msg.message.extendedTextMessage?.text || 
-         msg.message.imageMessage?.caption || '';
-}
-
-async function sendHelpMessage(from) {
-  await sock.sendMessage(from, { 
-    text: `🤖 *${BOT_NAME} - Commandes*\n\n` +
-          `🔐 *CONNEXION*\n` +
-          `• Code: ${SPONSOR_CODE}\n\n` +
-          `🤖 *FONCTIONNALITÉS*\n` +
-          `• summarize: texte - Résumé IA\n` +
-          `• image: prompt - Génération d'image\n` +
-          `• ping - Test de connexion\n\n` +
-          `💬 Envoyez un message pour discuter avec l'IA`
-  });
-}
-
-async function handleSummarize(from, text) {
-  const toSummarize = text.split(':').slice(1).join(':').trim();
-  if (!toSummarize) return;
-  await sock.sendMessage(from, { text: '📝 Résumé en cours...' });
-  const summary = await summarizeWithGemini(toSummarize);
-  await sock.sendMessage(from, { text: `📄 *RÉSUMÉ:*\n${summary}` });
-}
-
-async function handleImageGenerate(from, text) {
-  const prompt = text.split(':').slice(1).join(':').trim();
-  if (!prompt) return;
-  await sock.sendMessage(from, { text: '🎨 Génération image...' });
-  const imgUrl = await generateImageFluxAI(prompt);
-  await sock.sendMessage(from, { text: `🖼️ *IMAGE:*\n${imgUrl}` });
-}
-
-async function handleAIResponse(from, text) {
-  const aiReply = await generateAIReply(text);
-  if (aiReply) await sock.sendMessage(from, { text: aiReply });
-}
-
-async function summarizeWithGemini(text) {
-  if (!geminiModel) return "❌ IA non disponible";
+// === ÉVÉNEMENTS DU CLIENT ===
+client.on("qr", async (qr) => {
+  console.log("📱 Nouveau QR Code reçu !");
+  qrcode.generate(qr, { small: true });
   try {
-    const result = await geminiModel.generateContent(`Résume en français: ${text}`);
-    return result.response.text() || "Aucun résumé généré";
+    latestQr = await QRCode.toDataURL(qr);
+  } catch (err) {
+    console.error("Erreur QR:", err);
+  }
+});
+
+client.on("ready", () => {
+  isReady = true;
+  console.log(`✅ ${BOT_NAME} est connecté et prêt à répondre !`);
+  if (AUTO_BACKUP) autoExportSession();
+});
+
+client.on("authenticated", () => console.log("🔐 Authentifié avec succès"));
+client.on("auth_failure", (msg) => console.error("❌ Échec d'authentification :", msg));
+client.on("disconnected", async (reason) => {
+  console.error("⚠️ Déconnexion détectée :", reason);
+  isReady = false;
+  console.log("🔄 Tentative de reconnexion dans 10 secondes...");
+  setTimeout(() => client.initialize(), 10000);
+});
+
+// === KEEP ALIVE ===
+setInterval(() => {
+  axios
+    .get(`https://${process.env.RENDER_EXTERNAL_URL || `localhost:${PORT}`}`)
+    .then(() => console.log("💓 Keep-alive signal envoyé."))
+    .catch(() => {});
+}, 600000); // toutes les 10 minutes
+
+// === GESTION DES MESSAGES ===
+client.on("message", async (msg) => {
+  try {
+    const body = msg.body?.trim() || "";
+    const lower = body.toLowerCase();
+
+    // Réponses aux commandes
+    if (lower === "ping") return msg.reply("pong ✅");
+
+    if (["help", "aide"].includes(lower)) {
+      return msg.reply(
+        `📘 *Commandes disponibles* :
+- *ping* → test du bot
+- *summarize: texte* → résume un texte avec IA
+- *image: prompt* → génère une image via FluxAI
+- Message libre → réponse intelligente automatique 🤖`
+      );
+    }
+
+    if (lower.startsWith("summarize:")) {
+      const text = body.split(":").slice(1).join(":").trim();
+      if (!text) return msg.reply("Format attendu : summarize: [ton texte]");
+      await msg.reply("✍️ Résumé en cours...");
+      const summary = await summarizeWithGemini(text);
+      return msg.reply(summary);
+    }
+
+    if (lower.startsWith("image:")) {
+      const prompt = body.split(":").slice(1).join(":").trim();
+      if (!prompt) return msg.reply("Format attendu : image: [ton prompt]");
+      await msg.reply("🎨 Génération de l'image...");
+      const imgUrl = await generateImageFluxAI(prompt);
+      return msg.reply(`🖼️ Image générée : ${imgUrl}`);
+    }
+
+    // Si aucun mot-clé => réponse IA automatique
+    if (body.length > 0) {
+      const aiReply = await generateAIReply(body);
+      if (aiReply) await msg.reply(aiReply);
+    }
+  } catch (err) {
+    console.error("Erreur message:", err);
+  }
+});
+
+// === FONCTIONS IA AVEC GEMINI ===
+async function summarizeWithGemini(text) {
+  if (!GEMINI_API_KEY) return "❌ Clé Google Gemini manquante.";
+  if (!geminiModel) return "❌ Modèle Gemini non initialisé.";
+  
+  try {
+    const prompt = `Résume ce texte en français professionnellement, de manière concise et claire :\n\n${text}`;
+    const result = await geminiModel.generateContent(prompt);
+    const response = await result.response;
+    return response.text() || "Aucun résumé généré.";
   } catch (error) {
-    return "❌ Erreur résumé";
+    console.error("Erreur résumé Gemini:", error);
+    return "Erreur lors du résumé avec Gemini.";
   }
 }
 
 async function generateAIReply(message) {
-  if (!geminiModel) return "❌ IA non disponible";
+  if (!GEMINI_API_KEY) return "❌ Clé Google Gemini manquante.";
+  if (!geminiModel) return "❌ Modèle Gemini non initialisé.";
+  
   try {
-    const result = await geminiModel.generateContent(
-      `Réponds en français comme un assistant professionnel: ${message}`
-    );
-    return result.response.text();
+    const prompt = `Tu es OkitakoyBot, un assistant professionnel WhatsApp. Réponds toujours en français clair et respectueux, comme un conseiller professionnel. Réponds à ce message : ${message}`;
+    const result = await geminiModel.generateContent(prompt);
+    const response = await result.response;
+    return response.text() || "Je n'ai pas pu générer de réponse.";
   } catch (error) {
-    return "❌ Erreur de réponse";
+    console.error("Erreur Gemini:", error);
+    return "Je n'ai pas pu répondre à votre message.";
   }
 }
 
 async function generateImageFluxAI(prompt) {
-  if (!FLUX_KEY) return "❌ Clé Flux manquante";
+  if (!FLUX_KEY) return "❌ Clé FLUXAI_API_KEY manquante.";
   try {
-    const response = await axios.post(
-      'https://api.flux.ai/v1/generate',
+    const res = await axios.post(
+      "https://api.flux.ai/v1/generate",
       { prompt },
-      { headers: { Authorization: `Bearer ${FLUX_KEY}` } }
+      { headers: { Authorization: `Bearer ${FLUX_KEY}`, "Content-Type": "application/json" } }
     );
-    return response.data?.url || "❌ Erreur génération";
-  } catch (error) {
-    return "❌ Erreur API Flux";
+    return res.data?.url || "Aucune image générée.";
+  } catch (e) {
+    console.error("Erreur FluxAI:", e.response?.data || e.message);
+    return "Erreur lors de la génération d'image.";
   }
 }
 
-// === SERVEUR WEB ===
-app.get('/', (req, res) => {
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>${BOT_NAME} - Connexion</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; display: flex; align-items: center; justify-content: center; }
-        .container { max-width: 400px; background: white; border-radius: 15px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); text-align: center; }
-        h1 { color: #333; margin-bottom: 10px; }
-        .subtitle { color: #666; margin-bottom: 20px; }
-        .code-box { background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; border: 2px dashed #667eea; }
-        .code { font-size: 32px; font-weight: bold; color: #667eea; letter-spacing: 3px; margin: 10px 0; }
-        .instructions { background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: left; }
-        .step { margin: 10px 0; }
-        .copy-btn { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin-top: 10px; }
-        .copy-btn:hover { background: #218838; }
-        .status { margin-top: 15px; padding: 10px; border-radius: 5px; }
-        .online { background: #d4edda; color: #155724; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🔐 ${BOT_NAME}</h1>
-        <p class="subtitle">Système de connexion par parrainage</p>
-        
-        <div class="code-box">
-            <h3>VOTRE CODE D'APPAIRAGE :</h3>
-            <div class="code" id="sponsorCode">${SPONSOR_CODE}</div>
-            <button class="copy-btn" onclick="copyCode()">📋 Cliquez pour copier</button>
-        </div>
-        
-        <div class="instructions">
-            <h3>📱 COMMENT SE CONNECTER :</h3>
-            <div class="step">1. Ouvrez WhatsApp</div>
-            <div class="step">2. Envoyez le code <strong>${SPONSOR_CODE}</strong> au bot</div>
-            <div class="step">3. Vous êtes connecté ! 🎉</div>
-        </div>
-        
-        <div class="status ${isReady ? 'online' : ''}">
-            Status: ${isReady ? '🟢 Bot en ligne' : '🟡 Connexion en cours...'}
-        </div>
-        
-        <div style="margin-top: 20px; color: #666; font-size: 12px;">
-            <p>Code valable pour tous les utilisateurs</p>
-        </div>
-    </div>
+// === SAUVEGARDE AUTOMATIQUE ===
+function autoExportSession() {
+  if (!fs.existsSync(AUTH_DIR)) return;
+  const zipName = `session-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
+  const output = fs.createWriteStream(path.join(BACKUP_DIR, zipName));
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.pipe(output);
+  archive.directory(AUTH_DIR, false);
+  archive.finalize();
+  output.on("close", () => console.log(`💾 Session sauvegardée automatiquement.`));
+}
 
-    <script>
-        function copyCode() {
-            const code = document.getElementById('sponsorCode').textContent;
-            navigator.clipboard.writeText(code).then(() => {
-                alert('Code copié ! Collez-le dans WhatsApp');
-            });
-        }
-    </script>
-</body>
-</html>`;
-  res.send(html);
+// === SERVEUR WEB EXPRESS ===
+app.get("/", (req, res) => {
+  if (SHOW_QR_WEB && latestQr)
+    res.send(`<center><h2>${BOT_NAME}</h2><p>Scanne ce QR pour connecter le bot :</p><img src="${latestQr}" width="300"/></center>`);
+  else
+    res.send(`<center><h2>${BOT_NAME}</h2><p>Bot actif et connecté ✅</p><p>Status : ${isReady ? "🟢 En ligne" : "🔴 En attente de connexion"}</p></center>`);
 });
 
-// === DÉMARRAGE ===
-app.listen(PORT, () => {
-  console.log('🌐 Serveur sur port ' + PORT);
-  initializeBot().catch(console.error);
+app.get("/qr", (req, res) => {
+  if (!latestQr) return res.send("QR non généré...");
+  res.send(`<img src="${latestQr}" width="300"/>`);
 });
 
-console.log(`
-🎯 ${BOT_NAME} - SYSTÈME DE PARRAINAGE SIMPLE
-──────────────────────────────
-📱 PROCESSUS DE CONNEXION :
+app.listen(PORT, () => console.log(`🌐 Serveur Express lancé sur le port ${PORT}`));
 
-1. Utilisateur va sur votre site web
-2. Copie le code: ${SPONSOR_CODE}
-3. Ouvre WhatsApp et envoie le code au bot
-4. Le bot vérifie et valide la connexion
-5. Utilisateur connecté ! 🎉
-
-🌐 Interface web: http://localhost:${PORT}
-`);
+client.initialize();
