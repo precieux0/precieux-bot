@@ -24,8 +24,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const FLUX_KEY = process.env.FLUXAI_API_KEY;
 
 // === SYSTÈME DE PARRAINAGE ===
-const pendingConnections = new Map(); // Stocke les codes en attente
-const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
+const pendingConnections = new Map();
+const CODE_EXPIRY = 10 * 60 * 1000;
 
 function generateSponsorCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -53,7 +53,6 @@ async function initializeBot() {
     browser: ['Chrome (Linux)', '', '']
   });
 
-  // === GESTION CONNEXION ===
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     
@@ -74,7 +73,6 @@ async function initializeBot() {
 
   sock.ev.on('creds.update', saveCreds);
   
-  // === GESTION DES MESSAGES ===
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message || msg.key.fromMe) return;
@@ -86,11 +84,9 @@ async function initializeBot() {
       const lower = text.toLowerCase();
       const from = msg.key.remoteJid;
       
-      // 🔥 NOUVEAU: VÉRIFICATION CODE PARRAINAGE
       if (text.length === 6 && /^[A-Z0-9]{6}$/.test(text)) {
         const connection = pendingConnections.get(text);
         if (connection && Date.now() < connection.expiry) {
-          // Code valide! Connexion réussie
           pendingConnections.delete(text);
           await sock.sendMessage(from, { 
             text: `✅ *CONNEXION RÉUSSIE!*\n\nBienvenue ${connection.phone}!\n\nTapez *help* pour voir les commandes disponibles. 🤖` 
@@ -104,7 +100,6 @@ async function initializeBot() {
         }
       }
       
-      // Commandes normales
       if (lower === 'ping') await sock.sendMessage(from, { text: 'pong 🏓' });
       else if (lower === 'help') await sendHelpMessage(from);
       else if (lower.startsWith('summarize:')) await handleSummarize(from, text);
@@ -117,7 +112,6 @@ async function initializeBot() {
   });
 }
 
-// === FONCTIONS UTILITAIRES ===
 function getMessageText(msg) {
   return msg.message.conversation || 
          msg.message.extendedTextMessage?.text || 
@@ -159,7 +153,6 @@ async function handleAIResponse(from, text) {
   if (aiReply) await sock.sendMessage(from, { text: aiReply });
 }
 
-// === FONCTIONS IA ===
 async function summarizeWithGemini(text) {
   if (!geminiModel) return "❌ IA non disponible";
   try {
@@ -196,12 +189,11 @@ async function generateImageFluxAI(prompt) {
   }
 }
 
-// === SERVEUR WEB AVEC INTERFACE PARRAINAGE ===
+// === SERVEUR WEB ===
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// 🔥 ENDPOINT POUR GÉNÉRER UN CODE
 app.post('/generate-code', (req, res) => {
   const { phone } = req.body;
   
@@ -209,7 +201,6 @@ app.post('/generate-code', (req, res) => {
     return res.json({ success: false, error: 'Numéro requis' });
   }
   
-  // Nettoyer les anciens codes
   const now = Date.now();
   for (const [code, data] of pendingConnections.entries()) {
     if (now > data.expiry) pendingConnections.delete(code);
@@ -234,7 +225,6 @@ app.post('/generate-code', (req, res) => {
   });
 });
 
-// ENDPOINT POUR VÉRIFIER LES CODES ACTIFS (admin)
 app.get('/admin/codes', (req, res) => {
   const activeCodes = [];
   const now = Date.now();
@@ -248,15 +238,13 @@ app.get('/admin/codes', (req, res) => {
   res.json({ activeCodes });
 });
 
-// === DÉMARRAGE ===
-app.listen(PORT, () => {
-  console.log(`🌐 Serveur sur port ${PORT}`);
-  initializeBot().catch(console.error);
-});
+// === CRÉATION DU FICHIER HTML ===
+const publicDir = path.join(__dirname, 'public');
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
+}
 
-// === FICHIER HTML (public/index.html) ===
-const htmlContent = `
-<!DOCTYPE html>
+const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
     <title>${BOT_NAME} - Connexion</title>
@@ -334,15 +322,13 @@ const htmlContent = `
                 const data = await response.json();
                 
                 if (data.success) {
-                    showResult(`
-                        <h3>✅ Code généré avec succès !</h3>
-                        <div class="code">${data.code}</div>
-                        <p><strong>Expire à:</strong> ${data.expiry}</p>
+                    showResult(\\`<h3>✅ Code généré avec succès !</h3>
+                        <div class="code">\\${data.code}</div>
+                        <p><strong>Expire à:</strong> \\${data.expiry}</p>
                         <div style="background: #fff3cd; padding: 10px; border-radius: 5px; margin: 10px 0;">
                             <strong>Instructions:</strong><br>
-                            ${data.instructions}
-                        </div>
-                    `, 'success');
+                            \\${data.instructions}
+                        </div>\\`, 'success');
                 } else {
                     showResult('❌ ' + data.error, 'error');
                 }
@@ -362,16 +348,18 @@ const htmlContent = `
         }
     </script>
 </body>
-</html>
-`;
+</html>`;
 
-// Créer le dossier public et le fichier HTML
-const publicDir = path.join(__dirname, 'public');
-if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
 fs.writeFileSync(path.join(publicDir, 'index.html'), htmlContent);
 
-console.log(`
-🎯 ${BOT_NAME} - SYSTÈME DE PARRAINAGE
+// === DÉMARRAGE ===
+app.listen(PORT, () => {
+  console.log(\`🌐 Serveur sur port \\${PORT}\`);
+  initializeBot().catch(console.error);
+});
+
+console.log(\`
+🎯 \\${BOT_NAME} - SYSTÈME DE PARRAINAGE
 ──────────────────────────────
 📱 PROCESSUS DE CONNEXION :
 
@@ -381,5 +369,5 @@ console.log(`
 4. Le bot vérifie et valide la connexion
 5. Utilisateur connecté ! 🎉
 
-🌐 Interface web: http://localhost:${PORT}
-`);
+🌐 Interface web: http://localhost:\\${PORT}
+\`);
