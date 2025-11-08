@@ -1,13 +1,14 @@
 {
   "name": "precieux-bot",
   "version": "1.0.0",
-  "description": "WhatsApp bot connecté à OpenRouter via whatsapp-web.js, avec keep-alive et QR web visible.",
+  "description": "WhatsApp bot connecté à Google Gemini via whatsapp-web.js, avec keep-alive et QR web visible.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.21.0",
     "axios": "^1.6.0",
     "chalk": "^5.3.0",
     "express": "^4.19.2",
