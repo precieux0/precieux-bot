@@ -1,36 +1,26 @@
 {
   "name": "precieux-bot",
   "version": "1.0.0",
-  "description": "WhatsApp Bot avec Baileys + Google Gemini + Système de parrainage",
+  "description": "WhatsApp bot connecté à Google Gemini via whatsapp-web.js, avec keep-alive et QR web visible.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "start": "node src/index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.5.0",
     "@google/generative-ai": "^0.21.0",
-    "express": "^4.19.2",
     "axios": "^1.6.0",
+    "chalk": "^5.3.0",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "path": "^0.12.7",
     "qrcode-terminal": "^0.12.0",
     "qrcode": "^1.5.3",
-    "chalk": "^5.3.0",
-    "@hapi/boom": "^10.0.1"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
+    "whatsapp-web.js": "^1.23.0",
+    "extract-zip": "^2.0.1",
+    "archiver": "^5.3.1"
   },
   "engines": {
     "node": ">=18"
-  },
-  "keywords": [
-    "whatsapp-bot",
-    "baileys",
-    "gemini-ai",
-    "whatsapp-api",
-    "nodejs"
-  ],
-  "author": "Précieux Okitakoy",
-  "license": "MIT"
+  }
 }
