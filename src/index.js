@@ -1,5 +1,5 @@
 /**
- * OkitakoyBot — Système de parrainage par numéro
+ * OkitakoyBot — Système de parrainage simple
  * Auteur : Précieux Okitakoy
  */
 
@@ -23,13 +23,9 @@ const PORT = process.env.PORT || 3000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const FLUX_KEY = process.env.FLUXAI_API_KEY;
 
-// === SYSTÈME DE PARRAINAGE ===
-const pendingConnections = new Map();
-const CODE_EXPIRY = 10 * 60 * 1000;
-
-function generateSponsorCode() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
+// === CODE DE PARRAINAGE FIXE ===
+const SPONSOR_CODE = "OKITAKOY"; // ⬅️ CODE FIXE - Changez-le !
+const connectedUsers = new Set();
 
 // === INITIALISATION GEMINI ===
 let genAI, geminiModel;
@@ -83,23 +79,32 @@ async function initializeBot() {
       
       const lower = text.toLowerCase();
       const from = msg.key.remoteJid;
+      const userPhone = from.split('@')[0];
       
-      if (text.length === 6 && /^[A-Z0-9]{6}$/.test(text)) {
-        const connection = pendingConnections.get(text);
-        if (connection && Date.now() < connection.expiry) {
-          pendingConnections.delete(text);
+      // 🔥 VÉRIFICATION DU CODE DE PARRAINAGE
+      if (text.toUpperCase() === SPONSOR_CODE) {
+        if (connectedUsers.has(userPhone)) {
           await sock.sendMessage(from, { 
-            text: `✅ *CONNEXION RÉUSSIE!*\n\nBienvenue ${connection.phone}!\n\nTapez *help* pour voir les commandes disponibles. 🤖` 
+            text: '✅ *DÉJÀ CONNECTÉ!*\n\nVous êtes déjà connecté au bot. Tapez *help* pour voir les commandes.' 
           });
-          return;
         } else {
+          connectedUsers.add(userPhone);
           await sock.sendMessage(from, { 
-            text: '❌ Code invalide ou expiré. Obtenez un nouveau code sur notre site web.' 
+            text: `✅ *CONNEXION RÉUSSIE!*\n\nBienvenue ! Vous êtes maintenant connecté à *${BOT_NAME}*.\n\nTapez *help* pour voir les commandes disponibles. 🤖` 
           });
-          return;
         }
+        return;
       }
       
+      // Si l'utilisateur n'est pas connecté
+      if (!connectedUsers.has(userPhone)) {
+        await sock.sendMessage(from, { 
+          text: `🔐 *CONNEXION REQUISE*\n\nPour utiliser le bot, vous devez d'abord vous connecter avec le code de parrainage.\n\n📱 *Code:* ${SPONSOR_CODE}\n\n_Envoyez ce code pour vous connecter_` 
+        });
+        return;
+      }
+      
+      // Commandes pour utilisateurs connectés
       if (lower === 'ping') await sock.sendMessage(from, { text: 'pong 🏓' });
       else if (lower === 'help') await sendHelpMessage(from);
       else if (lower.startsWith('summarize:')) await handleSummarize(from, text);
@@ -122,8 +127,7 @@ async function sendHelpMessage(from) {
   await sock.sendMessage(from, { 
     text: `🤖 *${BOT_NAME} - Commandes*\n\n` +
           `🔐 *CONNEXION*\n` +
-          `• Obtenez votre code sur notre site web\n` +
-          `• Envoyez le code de 6 caractères ici\n\n` +
+          `• Code: ${SPONSOR_CODE}\n\n` +
           `🤖 *FONCTIONNALITÉS*\n` +
           `• summarize: texte - Résumé IA\n` +
           `• image: prompt - Génération d'image\n` +
@@ -191,60 +195,8 @@ async function generateImageFluxAI(prompt) {
 
 // === SERVEUR WEB ===
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.post('/generate-code', (req, res) => {
-  const { phone } = req.body;
-  
-  if (!phone) {
-    return res.json({ success: false, error: 'Numéro requis' });
-  }
-  
-  const now = Date.now();
-  for (const [code, data] of pendingConnections.entries()) {
-    if (now > data.expiry) pendingConnections.delete(code);
-  }
-  
-  const sponsorCode = generateSponsorCode();
-  const expiry = Date.now() + CODE_EXPIRY;
-  
-  pendingConnections.set(sponsorCode, {
-    phone: phone,
-    expiry: expiry,
-    timestamp: new Date().toLocaleString()
-  });
-  
-  console.log(`🔐 Nouveau code généré pour ${phone}: ${sponsorCode}`);
-  
-  res.json({
-    success: true,
-    code: sponsorCode,
-    expiry: new Date(expiry).toLocaleTimeString(),
-    instructions: `Envoyez "${sponsorCode}" sur WhatsApp pour vous connecter`
-  });
-});
-
-app.get('/admin/codes', (req, res) => {
-  const activeCodes = [];
-  const now = Date.now();
-  
-  for (const [code, data] of pendingConnections.entries()) {
-    if (now < data.expiry) {
-      activeCodes.push({ code, ...data });
-    }
-  }
-  
-  res.json({ activeCodes });
-});
-
-// === CRÉATION DU FICHIER HTML ===
-const publicDir = path.join(__dirname, 'public');
-if (!fs.existsSync(publicDir)) {
-  fs.mkdirSync(publicDir, { recursive: true });
-}
-
-const htmlContent = `<!DOCTYPE html>
+  const html = `
+<!DOCTYPE html>
 <html>
 <head>
     <title>${BOT_NAME} - Connexion</title>
@@ -252,23 +204,18 @@ const htmlContent = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
-        .container { max-width: 500px; margin: 0 auto; background: white; border-radius: 15px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
-        h1 { text-align: center; color: #333; margin-bottom: 10px; }
-        .subtitle { text-align: center; color: #666; margin-bottom: 30px; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: bold; color: #333; }
-        input { width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; transition: border-color 0.3s; }
-        input:focus { border-color: #667eea; outline: none; }
-        button { width: 100%; padding: 12px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; transition: transform 0.2s; }
-        button:hover { transform: translateY(-2px); }
-        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
-        .result { margin-top: 20px; padding: 15px; border-radius: 8px; text-align: center; display: none; }
-        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .code { font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 15px 0; color: #667eea; }
-        .instructions { background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 15px 0; }
-        .step { margin: 10px 0; padding-left: 20px; }
+        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; display: flex; align-items: center; justify-content: center; }
+        .container { max-width: 400px; background: white; border-radius: 15px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); text-align: center; }
+        h1 { color: #333; margin-bottom: 10px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .code-box { background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; border: 2px dashed #667eea; }
+        .code { font-size: 32px; font-weight: bold; color: #667eea; letter-spacing: 3px; margin: 10px 0; }
+        .instructions { background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: left; }
+        .step { margin: 10px 0; }
+        .copy-btn { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin-top: 10px; }
+        .copy-btn:hover { background: #218838; }
+        .status { margin-top: 15px; padding: 10px; border-radius: 5px; }
+        .online { background: #d4edda; color: #155724; }
     </style>
 </head>
 <body>
@@ -276,98 +223,57 @@ const htmlContent = `<!DOCTYPE html>
         <h1>🔐 ${BOT_NAME}</h1>
         <p class="subtitle">Système de connexion par parrainage</p>
         
-        <div class="form-group">
-            <label for="phone">Votre numéro de téléphone :</label>
-            <input type="tel" id="phone" placeholder="Ex: +229 12345678" required>
+        <div class="code-box">
+            <h3>VOTRE CODE D'APPAIRAGE :</h3>
+            <div class="code" id="sponsorCode">${SPONSOR_CODE}</div>
+            <button class="copy-btn" onclick="copyCode()">📋 Cliquez pour copier</button>
         </div>
-        
-        <button onclick="generateCode()">Générer mon code de connexion</button>
-        
-        <div id="result" class="result"></div>
         
         <div class="instructions">
-            <h3>📱 Comment se connecter :</h3>
-            <div class="step">1. Entrez votre numéro ci-dessus</div>
-            <div class="step">2. Recevez votre code de parrainage</div>
-            <div class="step">3. Ouvrez WhatsApp et envoyez le code au bot</div>
-            <div class="step">4. Vous êtes connecté ! 🎉</div>
+            <h3>📱 COMMENT SE CONNECTER :</h3>
+            <div class="step">1. Ouvrez WhatsApp</div>
+            <div class="step">2. Envoyez le code <strong>${SPONSOR_CODE}</strong> au bot</div>
+            <div class="step">3. Vous êtes connecté ! 🎉</div>
         </div>
         
-        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 14px;">
-            <p>Le code est valable 10 minutes</p>
+        <div class="status ${isReady ? 'online' : ''}">
+            Status: ${isReady ? '🟢 Bot en ligne' : '🟡 Connexion en cours...'}
+        </div>
+        
+        <div style="margin-top: 20px; color: #666; font-size: 12px;">
+            <p>Code valable pour tous les utilisateurs</p>
         </div>
     </div>
 
     <script>
-        async function generateCode() {
-            const phone = document.getElementById('phone').value;
-            const button = document.querySelector('button');
-            const result = document.getElementById('result');
-            
-            if (!phone) {
-                showResult('Veuillez entrer votre numéro', 'error');
-                return;
-            }
-            
-            button.disabled = true;
-            button.textContent = 'Génération en cours...';
-            
-            try {
-                const response = await fetch('/generate-code', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    showResult(\\`<h3>✅ Code généré avec succès !</h3>
-                        <div class="code">\\${data.code}</div>
-                        <p><strong>Expire à:</strong> \\${data.expiry}</p>
-                        <div style="background: #fff3cd; padding: 10px; border-radius: 5px; margin: 10px 0;">
-                            <strong>Instructions:</strong><br>
-                            \\${data.instructions}
-                        </div>\\`, 'success');
-                } else {
-                    showResult('❌ ' + data.error, 'error');
-                }
-            } catch (error) {
-                showResult('❌ Erreur de connexion', 'error');
-            }
-            
-            button.disabled = false;
-            button.textContent = 'Générer mon code de connexion';
-        }
-        
-        function showResult(message, type) {
-            const result = document.getElementById('result');
-            result.innerHTML = message;
-            result.className = 'result ' + type;
-            result.style.display = 'block';
+        function copyCode() {
+            const code = document.getElementById('sponsorCode').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                alert('Code copié ! Collez-le dans WhatsApp');
+            });
         }
     </script>
 </body>
 </html>`;
-
-fs.writeFileSync(path.join(publicDir, 'index.html'), htmlContent);
+  res.send(html);
+});
 
 // === DÉMARRAGE ===
 app.listen(PORT, () => {
-  console.log(\`🌐 Serveur sur port \\${PORT}\`);
+  console.log('🌐 Serveur sur port ' + PORT);
   initializeBot().catch(console.error);
 });
 
-console.log(\`
-🎯 \\${BOT_NAME} - SYSTÈME DE PARRAINAGE
+console.log(`
+🎯 ${BOT_NAME} - SYSTÈME DE PARRAINAGE SIMPLE
 ──────────────────────────────
 📱 PROCESSUS DE CONNEXION :
 
-1. Utilisateur entre son numéro sur le site
-2. Reçoit un code de 6 caractères
+1. Utilisateur va sur votre site web
+2. Copie le code: ${SPONSOR_CODE}
 3. Ouvre WhatsApp et envoie le code au bot
 4. Le bot vérifie et valide la connexion
 5. Utilisateur connecté ! 🎉
 
-🌐 Interface web: http://localhost:\\${PORT}
-\`);
+🌐 Interface web: http://localhost:${PORT}
+`);
